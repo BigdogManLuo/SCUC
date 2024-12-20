@@ -271,8 +271,6 @@ def calculateCosts(Vars):
 
     return Cost_ES_ch,Cost_ES_dch,Cost_unit_start,Cost_unit_opr
 
-
-
 def addColors(filePath,bin_table_name=['机组状态','机组启动状态','机组停机状态','储能状态'],continuous_table_name=['机组功率']):
     # 加载工作簿
     wb = load_workbook(filePath)
@@ -310,8 +308,8 @@ def addColors(filePath,bin_table_name=['机组状态','机组启动状态','机�
     wb.save(filePath)
 
 
-#---------------------------Parameters-----------------------------------------#
 
+#---------------------------Parameters-----------------------------------------#
 bid_capacity = txt_to_dataframe(read_txt('data/instances/1/bidcapacity.txt'))
 bid_price= txt_to_dataframe(read_txt('data/instances/1/bidprice.txt'))
 section= txt_to_dataframe(read_txt('data/instances/1/section.txt'))
@@ -322,13 +320,17 @@ storagebasic= txt_to_dataframe(read_txt('data/instances/1/storagebasic.txt'))
 unitdata= txt_to_dataframe(read_txt('data/instances/1/unitdata.txt'))
 gen_senses,load_sense,branch=parse_log_file('data/instances/1/branch_1.log')
 
-#getSegmentedPoints(bid_capacity.iloc[0],150)
+
 M=100000 #大M法中的大M值
 T=24 
 
+#----------------------储能分段线性信息---------------------------
 deltaP_ES=stbidcapactiy[1] #储能分段功率的间隔
-a_ES,b_ES=getSegmentedCostInfo(stbidprice[1:],deltaP_ES,0) #储能成本分段线性化
-P_ES_mins,P_ES_maxs=getSegmentedPoints(num_seg=len(stbidcapactiy)-1,deltaP=stbidcapactiy[1],P_min=0) #储能分段功率的上下限
+a_ES,b_ES=getSegmentedCostInfo(stbidprice[2:],deltaP=deltaP_ES,P_min=0) #储能成本分段线性化
+P_ES_mins,P_ES_maxs=getSegmentedPoints(num_seg=len(stbidcapactiy)-2,deltaP=stbidcapactiy[1],P_min=storagebasic['最小发电功率（MW）'][0]) #储能分段功率的上下限
+
+
+#---------------------断面信息-------------------------
 restricted_branches = section['断面组成']
 PF_load=np.zeros((len(restricted_branches),T)) #负荷对断面的潮流
 
@@ -346,7 +348,6 @@ for t in range(T):
 #---------------------------Results 校验-----------------------------#
 Vars=getSols('data/instances/1/solution.sol')
 Cost_ES_ch,Cost_ES_dch,Cost_unit_start,Cost_unit_opr=calculateCosts(Vars)
-
 
 
 #%%
@@ -376,10 +377,10 @@ P_ES_ch=cp.Variable((storagebasic.shape[0],T)) #充电功率
 P_ES_dch=cp.Variable((storagebasic.shape[0],T)) #放电功率
 PF_ES=cp.Variable((len(restricted_branches),T)) #储能机组对断面的潮流
 ES=cp.Variable((storagebasic.shape[0],T+1)) #储能容量剩余
-L_ES=[cp.Variable((storagebasic.shape[0],T),boolean=True) for j in range(len(stbidcapactiy)-1)] #储能属于哪个分段indicator
+L_ES=[cp.Variable((storagebasic.shape[0],T),boolean=True) for j in range(len(stbidcapactiy)-2)] #储能属于哪个分段indicator
 Cost_ES_ch=cp.Variable((storagebasic.shape[0],T)) #储能充电成本
 Cost_ES_dch=cp.Variable((storagebasic.shape[0],T)) #储能放电成本
-Cost_ES_dch_per_seg=[cp.Variable((storagebasic.shape[0],T)) for j in range(len(stbidcapactiy)-1)] #储能成本分段线性化变量
+Cost_ES_dch_per_seg=[cp.Variable((storagebasic.shape[0],T)) for j in range(len(stbidcapactiy)-2)] #储能成本分段线性化变量
 
 #---------------------------Constraints-----------------------------#
 constraints=[]
@@ -448,7 +449,7 @@ for i in range(unitdata.shape[0]):
         constraints+=[P_unit[i,t]>=sum(P_unit_mins[j]*L_unit[j][i,t] for j in range(bid_capacity.shape[1]-1))]
         constraints+=[P_unit[i,t]<=sum(P_unit_maxs[j]*L_unit[j][i,t] for j in range(bid_capacity.shape[1]-1))]
 
-        #有且只有一段被激活
+        #有且只有一段被激活,均不激活的时候为P_unit为0
         constraints+=[sum(L_unit[j][i,t] for j in range(len(bid_capacity)-1))<=1]
 
         #运行成本
@@ -461,7 +462,7 @@ for i in range(unitdata.shape[0]):
 
         #最终运行成本
         constraints+=[Cost_unit_opr[i,t]==sum(Cost_unit_opr_per_seg[j][i,t] for j in range(bid_capacity.shape[1]-1))]
-
+        
 
 #储能约束
 for i in range(storagebasic.shape[0]):
@@ -476,6 +477,8 @@ for i in range(storagebasic.shape[0]):
 
         #充电功率约束
         constraints += [P_ES_ch[i, t] == storagebasic['抽水固定功率（MW）'][i] * U_ch[i, t]]
+        
+        #放电功率约束
         constraints += [P_ES_dch[i, t] >= storagebasic['最小发电功率（MW）'][i]* U_dch[i, t]]
         constraints += [P_ES_dch[i, t] <=storagebasic['最大发电功率（MW）'][i]* U_dch[i, t]]
         
@@ -523,19 +526,20 @@ for i in range(storagebasic.shape[0]):
             constraints += [Z_ch[i, t] <= U_ES[i, t - 1]]
 
         #充电成本
-        constraints+= [Cost_ES_ch[i,t]==-stbidprice[0]*P_ES_ch[i,t]]  
+        constraints+= [Cost_ES_ch[i,t]==-stbidprice[0]]  
         
         
         #放电功率分段上下限约束
-        constraints+=[P_ES_dch[i,t]>=sum(P_ES_mins[j]*L_ES[j][i,t] for j in range(len(stbidcapactiy)-1))]
-        constraints+=[P_ES_dch[i,t]<=sum(P_ES_maxs[j]*L_ES[j][i,t] for j in range(len(stbidcapactiy)-1))]
+        constraints+=[P_ES_dch[i,t]>=sum(P_ES_mins[j]*L_ES[j][i,t] for j in range(len(stbidcapactiy)-2))]
+        constraints+=[P_ES_dch[i,t]<=sum(P_ES_maxs[j]*L_ES[j][i,t] for j in range(len(stbidcapactiy)-2))]
 
 
         #有且只有一段被激活
-        constraints+=[sum(L_ES[j][i,t] for j in range(len(stbidcapactiy)-1))==1]
-
+        constraints+=[sum(L_ES[j][i,t] for j in range(len(stbidcapactiy)-2))<=1]
+        
+        
         #放电成本分段线性
-        for j in range(len(stbidcapactiy)-1):
+        for j in range(len(stbidcapactiy)-2):
             
             constraints+=[Cost_ES_dch_per_seg[j][i,t]>=0]
             constraints+=[Cost_ES_dch_per_seg[j][i,t]<=L_ES[j][i,t]*M]
@@ -543,7 +547,7 @@ for i in range(storagebasic.shape[0]):
             constraints+=[Cost_ES_dch_per_seg[j][i,t]>=a_ES[j]*P_ES_dch[i,t]+b_ES[j]*U_dch[i,t]-M*(1-L_ES[j][i,t])]
 
         #最终放电成本
-        constraints+=[Cost_ES_dch[i,t]==sum(Cost_ES_dch_per_seg[j][i,t] for j in range(len(stbidcapactiy)-1))]
+        constraints+=[Cost_ES_dch[i,t]==sum(Cost_ES_dch_per_seg[j][i,t] for j in range(len(stbidcapactiy)-2))]
         
         
 #系统约束
@@ -592,7 +596,6 @@ solver_opt={
     'solver':cp.GUROBI,
     'verbose':True,
     'MIPGap':0.0003}
-
 
 prob.solve(**solver_opt)
 
