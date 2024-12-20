@@ -111,8 +111,6 @@ def getSols(filePath):
         elif line[1]=='0':
             U_unit[t//24,t%24]=0
         
-        
-        
     Vars={"P_ES_ch":P_ES_ch,
               "P_ES_dch":P_ES_dch,
               "U_ES":U_ES,

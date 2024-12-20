@@ -76,22 +76,6 @@ def parse_log_file(file_path):
 
     return df_tuple
 
-'''
-def check_linear_increasing(arr):
-    diffs = np.diff(arr)
-    if np.all(diffs == diffs[0]):
-        return True, [diffs[0]]
-    else:
-        segments = []
-        start = 0
-        for i in range(1, len(diffs)):
-            if diffs[i] != diffs[i-1]:
-                segments.append((start, i, diffs[start]))
-                start = i
-        segments.append((start, len(diffs), diffs[start]))
-        return False, segments
-'''
-
 def getSegmentedCostInfo(prices,deltaP,P_min):
    
     # 计算每个区间的斜率和截距
@@ -120,6 +104,175 @@ def getSegmentedPoints(num_seg,deltaP,P_min):
 
     return Pmins,Pmaxs
 
+
+def getSols(filePath):
+
+    with open(filePath, 'r') as f:
+        lines = f.readlines()
+        
+    lines=lines[1:]
+    storage_status_lines = []
+    storage_power_lines = []
+    unit_status_lines = []
+    unit_power_lines = []
+    
+    for line in lines:
+        if line.startswith("storage") and "_s_" in line:
+            storage_status_lines.append(line)
+        elif line.startswith("storage") and "_p_" in line:
+            storage_power_lines.append(line)
+        elif line.startswith("unit") and "_s_" in line:
+            unit_status_lines.append(line)
+        elif line.startswith("unit") and "_p_" in line:
+            unit_power_lines.append(line)
+            
+    #读取储能的信息
+    P_ES_ch=np.zeros(24)
+    P_ES_dch=np.zeros(24)
+    U_ES=np.zeros(24)
+    U_ch=np.zeros(24)
+    U_dch=np.zeros(24)
+    
+    #储能充放电功率
+    for t,line in enumerate(storage_power_lines):
+        line=line.split()
+        if float(line[1])<=0:
+            P_ES_ch[t]=-float(line[1])
+            P_ES_dch[t]=0
+        else:
+            P_ES_ch[t]=0
+            P_ES_dch[t]=float(line[1])
+            
+    #储能状态
+    for t,line in enumerate(storage_status_lines):
+        line=line.split()
+        if line[1]=='-1': #充电状态
+            U_ES[t]=0
+            U_ch[t]=1
+            U_dch[t]=0
+            
+        elif line[1]=='1': #放电状态
+            U_ES[t]=0
+            U_ch[t]=0
+            U_dch[t]=1
+        
+        elif line[1]=='0': #停机状态
+            U_ES[t]=1
+            U_ch[t]=0
+            U_dch[t]=0
+            
+    #读取机组的信息
+    N_unit=int(len(unit_power_lines)/24)
+    P_unit=np.zeros((N_unit,24))
+    U_unit=np.zeros((N_unit,24))
+    
+    #机组发电功率
+    for t,line in enumerate(unit_power_lines):
+        #t/24取余数为机组编号
+        line=line.split()
+        P_unit[t//24,t%24]=float(line[1])
+        
+    #机组状态
+    for t,line in enumerate(unit_status_lines):
+        line=line.split()
+        if line[1]=='1': #发电状态
+            U_unit[t//24,t%24]=1
+        elif line[1]=='0':
+            U_unit[t//24,t%24]=0
+        
+    Vars={"P_ES_ch":P_ES_ch,
+              "P_ES_dch":P_ES_dch,
+              "U_ES":U_ES,
+              "U_ch":U_ch,
+              "U_dch":U_dch,
+              "P_unit":P_unit,
+              "U_unit":U_unit}
+    
+    return Vars
+
+def calculateCosts(Vars):
+
+    P_ES_ch=Vars['P_ES_ch']
+    P_ES_dch=Vars['P_ES_dch']
+    U_ES=Vars['U_ES']
+    U_ch=Vars['U_ch']
+    U_dch=Vars['U_dch']
+    P_unit=Vars['P_unit']
+    U_unit=Vars['U_unit']
+
+    #充电成本
+    Cost_ES_ch=-stbidprice[0]*np.sum(P_ES_ch)
+
+    #放电成本
+    Cost_ES_dch=0
+    for t in range(24):
+        
+        #判断P_ES_ch属于哪一段
+        flag=0
+        if P_ES_dch[t]!=0:
+            for j in range(len(stbidcapactiy)-1):
+                if P_ES_dch[t]>=P_ES_mins[j] and P_ES_dch[t]<=P_ES_maxs[j]:
+                    flag=1
+                    break
+            if flag==0:
+                raise ValueError('P_ES_dch[t]不在任何一段范围内')
+
+            Cost_ES_dch+=a_ES[j]*P_ES_dch[t]+b_ES[j]*U_dch[t]
+            
+        else:
+            Cost_ES_dch+=0
+        
+
+    #通过Unit推导启动和停机的indicator
+    V_unit=np.zeros_like(U_unit)
+    W_unit=np.zeros_like(U_unit)
+
+    for i in range(U_unit.shape[0]):
+        for t in range(24):
+            if t==0: #初始时刻的启停机状态
+                V_unit[i,t]=U_unit[i,t]-unitdata['初始状态(1开机,0停机)'][i]
+                W_unit[i,t]=unitdata['初始状态(1开机,0停机)'][i]-U_unit[i,t]
+
+            if t>0:
+                V_unit[i,t]=max(0,U_unit[i,t]-U_unit[i,t-1])
+                W_unit[i,t]=max(0,U_unit[i,t-1]-U_unit[i,t])
+
+    #机组启动成本
+    Cost_unit_start=0
+    for t in range(24):
+        Cost_unit_start+=np.sum(unitdata['启动成本（元）'].values*U_unit[:,t])
+
+    #机组运行成本
+    Cost_unit_opr=0
+    for t in range(24):
+        for i in range(P_unit.shape[0]):
+
+            #计算成本区间上下限
+            P_unit_mins,P_unit_maxs=getSegmentedPoints(num_seg=bid_capacity.shape[1]-1,deltaP=bid_capacity.iloc[i,1],P_min=unitdata['最小出力(MW)'][i])
+
+            #每个区间的斜率和截距
+            a_unit,b_unit=getSegmentedCostInfo(prices=bid_price.iloc[i,2:],deltaP=bid_capacity.iloc[i,1],P_min=unitdata['最小出力(MW)'][i])
+
+            #判断P_unit[i,t]属于哪一段
+            flag=0
+            if P_unit[i,t]!=0:
+                for j in range(bid_capacity.shape[1]-1):
+                    if P_unit[i,t]>=P_unit_mins[j] and P_unit[i,t]<=P_unit_maxs[j]:
+                        flag=1
+                        break
+                    
+                if flag==0:
+                    raise ValueError('P_unit[i,t]不在任何一段范围内')
+                
+                Cost_unit_opr+=a_unit[j]*P_unit[i,t]+b_unit[j]*U_unit[i,t]
+            else:
+                Cost_unit_opr+=0
+            
+
+    return Cost_ES_ch,Cost_ES_dch,Cost_unit_start,Cost_unit_opr
+
+
+
 def addColors(filePath,bin_table_name=['机组状态','机组启动状态','机组停机状态','储能状态'],continuous_table_name=['机组功率']):
     # 加载工作簿
     wb = load_workbook(filePath)
@@ -140,7 +293,6 @@ def addColors(filePath,bin_table_name=['机组状态','机组启动状态','机�
                     cell.fill = fill_1
                 elif cell.value == 0:
                     cell.fill = fill_0
-
 
 
     # 为连续值的变量设置颜色渐变
@@ -190,7 +342,14 @@ for t in range(T):
         #负荷对断面的潮流
         PF_load[j,t]=load_in_branch['母线负荷对该支路潮流的灵敏度值乘积和'][t]
 
+#%%
+#---------------------------Results 校验-----------------------------#
+Vars=getSols('data/instances/1/solution.sol')
+Cost_ES_ch,Cost_ES_dch,Cost_unit_start,Cost_unit_opr=calculateCosts(Vars)
 
+
+
+#%%
 #---------------------------Variables-----------------------------#
 
 #Unit Data
@@ -200,8 +359,8 @@ V_unit=cp.Variable((unitdata.shape[0],T),boolean=True) #启动indicator
 W_unit=cp.Variable((unitdata.shape[0],T),boolean=True) #停机indicator
 PF_unit=cp.Variable((len(restricted_branches),T)) #火电机组对断面的潮流
 L_unit=[cp.Variable((unitdata.shape[0],T),boolean=True) for j in range(len(bid_capacity)-1)] #火电机组属于哪个分段indicator
-PL_unit=[cp.Variable((unitdata.shape[0],T)) for j in range(len(bid_capacity)-1)]
 Cost_unit_start=cp.Variable((unitdata.shape[0],T))
+Cost_unit_down=cp.Variable((unitdata.shape[0],T)) #虚拟的停机成本用于松弛停机indicator
 Cost_unit_opr=cp.Variable((unitdata.shape[0],T))
 Cost_unit_opr_per_seg=[cp.Variable((unitdata.shape[0],T)) for j in range(len(bid_capacity)-1)] #火电机组成本分段线性化变量
 
@@ -218,7 +377,6 @@ P_ES_dch=cp.Variable((storagebasic.shape[0],T)) #放电功率
 PF_ES=cp.Variable((len(restricted_branches),T)) #储能机组对断面的潮流
 ES=cp.Variable((storagebasic.shape[0],T+1)) #储能容量剩余
 L_ES=[cp.Variable((storagebasic.shape[0],T),boolean=True) for j in range(len(stbidcapactiy)-1)] #储能属于哪个分段indicator
-PL_ES=[cp.Variable((storagebasic.shape[0],T)) for j in range(len(stbidcapactiy)-1)]
 Cost_ES_ch=cp.Variable((storagebasic.shape[0],T)) #储能充电成本
 Cost_ES_dch=cp.Variable((storagebasic.shape[0],T)) #储能放电成本
 Cost_ES_dch_per_seg=[cp.Variable((storagebasic.shape[0],T)) for j in range(len(stbidcapactiy)-1)] #储能成本分段线性化变量
@@ -282,25 +440,24 @@ for i in range(unitdata.shape[0]):
         
         #启动成本
         constraints+=[Cost_unit_start[i,t]==unitdata['启动成本（元）'][i]*V_unit[i,t]]
-        
 
+        #虚拟的停机成本
+        constraints+=[Cost_unit_down[i,t]==W_unit[i,t]]
+        
         #分段功率上下限约束
         constraints+=[P_unit[i,t]>=sum(P_unit_mins[j]*L_unit[j][i,t] for j in range(bid_capacity.shape[1]-1))]
         constraints+=[P_unit[i,t]<=sum(P_unit_maxs[j]*L_unit[j][i,t] for j in range(bid_capacity.shape[1]-1))]
 
         #有且只有一段被激活
-        constraints+=[sum(L_unit[j][i,t] for j in range(len(bid_capacity)-1))==1]
+        constraints+=[sum(L_unit[j][i,t] for j in range(len(bid_capacity)-1))<=1]
 
         #运行成本
         for j in range(bid_capacity.shape[1]-1):
 
-            #每段的运行成本，有且只有一段被激活,用PL_unit[j][i,t]来替代P_unit[i,t]*L_unit[j][i,t]
-            constraints+=[PL_unit[j][i,t]>=0]
-            constraints+=[PL_unit[j][i,t]<=unitdata['最大出力(MW)'][i]*L_unit[j][i,t]]
-            constraints+=[PL_unit[j][i,t]<=P_unit[i,t]]
-            constraints+=[PL_unit[j][i,t]>=P_unit[i,t]-unitdata['最大出力(MW)'][i]*(1-L_unit[j][i,t])]
-
-            constraints+=[Cost_unit_opr_per_seg[j][i,t]==a_unit[j]*PL_unit[j][i,t]+b_unit[j]*L_unit[j][i,t]]
+            constraints+=[Cost_unit_opr_per_seg[j][i,t]>=0]
+            constraints+=[Cost_unit_opr_per_seg[j][i,t]<=L_unit[j][i,t]*M]
+            constraints+=[Cost_unit_opr_per_seg[j][i,t]<=a_unit[j]*P_unit[i,t]+b_unit[j]*U_unit[i,t]]
+            constraints+=[Cost_unit_opr_per_seg[j][i,t]>=a_unit[j]*P_unit[i,t]+b_unit[j]*U_unit[i,t]-M*(1-L_unit[j][i,t])]
 
         #最终运行成本
         constraints+=[Cost_unit_opr[i,t]==sum(Cost_unit_opr_per_seg[j][i,t] for j in range(bid_capacity.shape[1]-1))]
@@ -373,24 +530,22 @@ for i in range(storagebasic.shape[0]):
         constraints+=[P_ES_dch[i,t]>=sum(P_ES_mins[j]*L_ES[j][i,t] for j in range(len(stbidcapactiy)-1))]
         constraints+=[P_ES_dch[i,t]<=sum(P_ES_maxs[j]*L_ES[j][i,t] for j in range(len(stbidcapactiy)-1))]
 
+
         #有且只有一段被激活
         constraints+=[sum(L_ES[j][i,t] for j in range(len(stbidcapactiy)-1))==1]
 
         #放电成本分段线性
         for j in range(len(stbidcapactiy)-1):
             
-            #每段的放电成本，有且只有一段被激活,用PL_ES[j][i,t]来替代P_ES_dch[i,t]*L_ES[j][i,t]
-            constraints+=[PL_ES[j][i,t]>=0]
-            constraints+=[PL_ES[j][i,t]<=storagebasic['最大发电功率（MW）'][i]*L_ES[j][i,t]]
-            constraints+=[PL_ES[j][i,t]<=P_ES_dch[i,t]]
-            constraints+=[PL_ES[j][i,t]>=P_ES_dch[i,t]-storagebasic['最大发电功率（MW）'][i]*(1-L_ES[j][i,t])]
-        
-            constraints+=[Cost_ES_dch_per_seg[j][i,t]==a_ES[j]*PL_ES[j][i,t]+b_ES[j]*L_ES[j][i,t]]
+            constraints+=[Cost_ES_dch_per_seg[j][i,t]>=0]
+            constraints+=[Cost_ES_dch_per_seg[j][i,t]<=L_ES[j][i,t]*M]
+            constraints+=[Cost_ES_dch_per_seg[j][i,t]<=a_ES[j]*P_ES_dch[i,t]+b_ES[j]*U_dch[i,t]]
+            constraints+=[Cost_ES_dch_per_seg[j][i,t]>=a_ES[j]*P_ES_dch[i,t]+b_ES[j]*U_dch[i,t]-M*(1-L_ES[j][i,t])]
 
         #最终放电成本
         constraints+=[Cost_ES_dch[i,t]==sum(Cost_ES_dch_per_seg[j][i,t] for j in range(len(stbidcapactiy)-1))]
         
-
+        
 #系统约束
 for t in range(T):
 
@@ -417,16 +572,17 @@ for t in range(T):
         constraints+=[
             PF_ES[j,t]==(P_ES_dch[i,t]-P_ES_ch[i,t])*gen_senses[f'{len(unitdata)}对所列支路潮流的灵敏度值'][branch_idx]
         ]
-    
-        
-        #断面潮流约束 这里应该是+ 还是-
+
+        #断面潮流约束
         constraints+=[
             PF_unit[j,t]+PF_ES[j,t]-PF_load[j,t]<=section['断面限额'][j]
         ]
         
 #---------------------------------Objective---------------------------------#
 #目标函数=火电机组的启动成本+火电机组的运行成本+储能机组的运行成本
-obj=cp.Minimize(cp.sum(Cost_unit_start)+cp.sum(Cost_unit_opr)+cp.sum(Cost_ES_ch)+cp.sum(Cost_ES_dch))
+obj=cp.Minimize(cp.sum(Cost_unit_start)+cp.sum(Cost_unit_down)+
+                cp.sum(Cost_unit_opr)+
+                cp.sum(Cost_ES_ch)+cp.sum(Cost_ES_dch))
 
 
 #---------------------------------Solve---------------------------------#
@@ -437,66 +593,67 @@ solver_opt={
     'verbose':True,
     'MIPGap':0.0003}
 
+
 prob.solve(**solver_opt)
 
+if prob.status=='optimal':
+    #---------------------------------Output---------------------------------#
+    print('Optimal value:', prob.value)
 
-'''
-#---------------------------------Output---------------------------------#
-print('Optimal value:', prob.value)
-
-#机组状态
-Unit_status=pd.DataFrame()
-Unit_status['机组序号']=unitdata['机组序号']
-Unit_status['最小开机时间(h)']=unitdata['最小开机时间(h)']
-Unit_status['最小停机时间(h)']=unitdata['最小停机时间(h)']
-for t in range(T):
-    Unit_status['第'+str(t+1)+'时刻状态']=U_unit.value[:,t]
-
-
-for i in range(unitdata.shape[0]):
-    is_linear,k=check_linear_increasing(np.array(bid_price.iloc[i,2:])) #对分段成本进行判断
-    gen_cost=np.mean(k[:][2])
-    Unit_status.loc[i,'边际成本(元/MWh)']=gen_cost
-
-#机组启停机状态
-V_unit_status=pd.DataFrame()
-V_unit_status['机组序号']=unitdata['机组序号']
-for t in range(T):
-    V_unit_status['第'+str(t+1)+'时刻启动']=V_unit.value[:,t]
-
-W_unit_status=pd.DataFrame()
-W_unit_status['机组序号']=unitdata['机组序号']
-for t in range(T):
-    W_unit_status['第'+str(t+1)+'时刻停机']=W_unit.value[:,t]
-
-#机组功率
-P_unit_status=pd.DataFrame()
-P_unit_status['机组序号']=unitdata['机组序号']
-for t in range(T):
-    P_unit_status['第'+str(t+1)+'时刻功率(MW)']=P_unit.value[:,t]
-P_unit_status['负荷']=load['系统负荷大小（MW）']
-
-#储能状态
-ES_status = pd.DataFrame()
-ES_status['储能容量(MWh)'] = ES.value[:,].flatten()
-ES_status['充电状态'] = np.append(U_ch.value.flatten(), 0)
-ES_status['放电状态'] = np.append(U_dch.value.flatten(), 0)
-ES_status['停机状态'] = np.append(U_ES.value.flatten(), 0)
-ES_status['充电功率(MW)'] = np.append(P_ES_ch.value.flatten(), 0)
-ES_status['放电功率(MW)'] = np.append(P_ES_dch.value.flatten(), 0)
+    #机组状态
+    Unit_status=pd.DataFrame()
+    Unit_status['机组序号']=unitdata['机组序号']
+    Unit_status['最小开机时间(h)']=unitdata['最小开机时间(h)']
+    Unit_status['最小停机时间(h)']=unitdata['最小停机时间(h)']
+    for t in range(T):
+        Unit_status['第'+str(t+1)+'时刻状态']=U_unit.value[:,t]
 
 
-#写入到excel
-with pd.ExcelWriter('results/result.xlsx') as writer:
-    Unit_status.to_excel(writer, sheet_name='机组状态', index=False)
-    V_unit_status.to_excel(writer, sheet_name='机组启动状态', index=False)
-    W_unit_status.to_excel(writer, sheet_name='机组停机状态', index=False)
-    P_unit_status.to_excel(writer, sheet_name='机组功率', index=False)
-    ES_status.to_excel(writer, sheet_name='储能状态', index=False)
+    for i in range(unitdata.shape[0]):
 
-addColors('results/result.xlsx')
-'''
+        a_unit,b_unit=getSegmentedCostInfo(prices=bid_price.iloc[i,2:],deltaP=bid_capacity.iloc[i,1],P_min=unitdata['最小出力(MW)'][i])
+        Unit_status.loc[i,'平均单位发电成本']=np.mean(a_unit[:])
 
+    #机组启停机状态
+    V_unit_status=pd.DataFrame()
+    V_unit_status['机组序号']=unitdata['机组序号']
+    for t in range(T):
+        V_unit_status['第'+str(t+1)+'时刻启动']=V_unit.value[:,t]
+
+    W_unit_status=pd.DataFrame()
+    W_unit_status['机组序号']=unitdata['机组序号']
+    for t in range(T):
+        W_unit_status['第'+str(t+1)+'时刻停机']=W_unit.value[:,t]
+
+    #机组功率
+    P_unit_status=pd.DataFrame()
+    P_unit_status['机组序号']=unitdata['机组序号']
+    for t in range(T):
+        P_unit_status['第'+str(t+1)+'时刻功率(MW)']=P_unit.value[:,t]
+    P_unit_status['负荷']=load['系统负荷大小（MW）']
+
+    #储能状态
+    ES_status = pd.DataFrame()
+    ES_status['储能容量(MWh)'] = ES.value[:,].flatten()
+    ES_status['充电状态'] = np.append(U_ch.value.flatten(), 0)
+    ES_status['放电状态'] = np.append(U_dch.value.flatten(), 0)
+    ES_status['停机状态'] = np.append(U_ES.value.flatten(), 0)
+    ES_status['充电功率(MW)'] = np.append(P_ES_ch.value.flatten(), 0)
+    ES_status['放电功率(MW)'] = np.append(P_ES_dch.value.flatten(), 0)
+
+
+    #写入到excel
+    with pd.ExcelWriter('results/result.xlsx') as writer:
+        Unit_status.to_excel(writer, sheet_name='机组状态', index=False)
+        V_unit_status.to_excel(writer, sheet_name='机组启动状态', index=False)
+        W_unit_status.to_excel(writer, sheet_name='机组停机状态', index=False)
+        P_unit_status.to_excel(writer, sheet_name='机组功率', index=False)
+        ES_status.to_excel(writer, sheet_name='储能状态', index=False)
+
+    addColors('results/result.xlsx')
+
+else:
+    print('No optimal solution found')
 
 
 ''' 备注：
