@@ -7,28 +7,37 @@ import coptpy as copt
 
 def calculateCosts(P_ES_ch,P_ES_dch,U_ch,U_dch,P_unit,U_unit,):
 
-    eps=0.1
+    eps=0.001
+    N_ESs=P_ES_ch.shape[0]
+    N_ES_segs=stbidcapactiy.shape[1]-3
+
     #充电成本
-    Cost_ES_ch=stbidprice[0]*np.sum(U_ch)
+    Cost_ES_ch=0
+    for i in range(N_ESs):
+        Cost_ES_ch+=stbidprice['价格-1'][i]*np.sum(U_ch[i])
 
     #放电成本
     Cost_ES_dch=0
-    for t in range(24):
-        
-        #判断P_ES_dch属于哪一段
-        flag=0
-        if P_ES_dch[t]!=0:
-            for j in range(N_ES_segs):
-                if P_ES_dch[t]>=P_ES_mins[j] and P_ES_dch[t]<=P_ES_maxs[j]:
-                    flag=1
-                    break
-            if flag==0:
-                raise ValueError('P_ES_dch[t]不在任何一段范围内')
+    for i in range(N_ESs):
 
-            Cost_ES_dch+=a_ES[j]*P_ES_dch[t]+b_ES[j]
-            
-        else:
-            Cost_ES_dch+=0
+        #计算成本区间上下限
+        P_ES_mins,P_ES_maxs=utils.getSegmentedPoints(num_seg=N_ES_segs,deltaP=stbidcapactiy['报价段1'][i],P_min=storagebasic['最小发电功率（MW）'][i])
+
+        for t in range(24):
+            #判断P_ES_dch属于哪一段
+            flag=0
+            if abs(P_ES_dch[i,t])>eps:
+                for j in range(N_ES_segs):
+                    if P_ES_dch[i,t]>=P_ES_mins[j]-eps and P_ES_dch[i,t]<=P_ES_maxs[j]+eps:
+                        flag=1
+                        break
+                if flag==0:
+                    raise ValueError('P_ES_dch[i,t]不在任何一段范围内')
+
+                Cost_ES_dch+=a_ES[i][j]*P_ES_dch[i,t]+b_ES[i][j]
+                
+            else:
+                Cost_ES_dch+=0
         
 
     #通过Unit推导启动和停机的indicator
@@ -65,7 +74,7 @@ def calculateCosts(P_ES_ch,P_ES_dch,U_ch,U_dch,P_unit,U_unit,):
 
             #判断P_unit[i,t]属于哪一段
             flag=0
-            if P_unit[i,t]!=0:
+            if abs(P_unit[i,t])>eps:
                 for j in range(bid_capacity.shape[1]-1):
                     if P_unit[i,t]>=P_unit_mins[j]-eps and P_unit[i,t]<=P_unit_maxs[j]+eps:
                         flag=1
@@ -83,15 +92,15 @@ def calculateCosts(P_ES_ch,P_ES_dch,U_ch,U_dch,P_unit,U_unit,):
 
 
 #%%  
-instance_num=60
+instance_num=100
 
 #---------------------------Parameters-----------------------------------------#
 bid_capacity = utils.txt_to_dataframe(utils.read_txt(f'data/instances/{instance_num}/bidcapacity.txt'))
 bid_price= utils.txt_to_dataframe(utils.read_txt(f'data/instances/{instance_num}/bidprice.txt'))
 section= utils.txt_to_dataframe(utils.read_txt(f'data/instances/{instance_num}/section.txt'))
 load= utils.txt_to_dataframe(utils.read_txt(f'data/instances/{instance_num}/slf.txt'))
-stbidcapactiy= utils.readStorageBidInfo(f'data/instances/{instance_num}/stbidcapacity.txt')
-stbidprice= utils.readStorageBidInfo(f'data/instances/{instance_num}/stbidprice.txt')
+stbidcapactiy=utils.txt_to_dataframe(utils.read_txt(f'data/instances/{instance_num}/stbidcapacity.txt',is_storage_price=True))
+stbidprice=utils.txt_to_dataframe(utils.read_txt(f'data/instances/{instance_num}/stbidprice.txt',is_storage_price=True))
 storagebasic= utils.txt_to_dataframe(utils.read_txt(f'data/instances/{instance_num}/storagebasic.txt'))
 unitdata= utils.txt_to_dataframe(utils.read_txt(f'data/instances/{instance_num}/unitdata.txt'))
 gen_senses,load_sense,branch=utils.parse_log_file(f'data/instances/{instance_num}/branch_1.log')
@@ -106,18 +115,23 @@ N_unit_segs=bid_capacity.shape[1]-1
 #计算火电的分段斜率
 a_unit=np.zeros((N_units,N_unit_segs))
 b_unit=np.zeros((N_units,N_unit_segs))
-deltaP_unit=bid_capacity.iloc[:,1]
+deltaP_unit=bid_capacity['第一段功率(MW)']
 for i in range(N_units):
     a_unit[i],b_unit[i]=utils.getSegmentedCostInfo(prices=bid_price.iloc[i,2:],deltaP=deltaP_unit[i],P_min=unitdata['最小出力(MW)'][i])
 C0_unit=bid_price['第一段价格(元)']
 
-#----------------------储能分段线性信息---------------------------
-deltaP_ES=stbidcapactiy[1] #储能分段功率的间隔
-N_ES_segs=len(stbidcapactiy)-2
+#----------------------储能信息---------------------------
 N_ESs=storagebasic.shape[0]
-a_ES,b_ES=utils.getSegmentedCostInfo(stbidprice[2:],deltaP=deltaP_ES,P_min=storagebasic['最小发电功率（MW）'][0]) #储能成本分段线性化
-P_ES_mins,P_ES_maxs=utils.getSegmentedPoints(num_seg=N_ES_segs,deltaP=stbidcapactiy[1],P_min=storagebasic['最小发电功率（MW）'][0]) #储能分段功率的上下限
-C0_ES=stbidprice[2]
+N_ES_segs=stbidcapactiy.shape[1]-3
+
+#计算储能的分段斜率
+a_ES=np.zeros((N_ESs,N_ES_segs))
+b_ES=np.zeros((N_ESs,N_ES_segs))
+deltaP_ES=stbidcapactiy['报价段1']
+for i in range(N_ESs):
+    a_ES[i],b_ES[i]=utils.getSegmentedCostInfo(prices=stbidprice.iloc[i,3:],deltaP=deltaP_ES[i],P_min=storagebasic['最小发电功率（MW）'][i])
+    
+C0_ES=stbidprice['价格1']
 
 
 #---------------------断面信息-------------------------
@@ -320,19 +334,19 @@ for i in range(N_ESs):
             model.addConstr(Z_ch[i, t] <= U_ES[i, t - 1])
 
         #充电成本
-        model.addConstr(Cost_ES_ch[i,t]==stbidprice[0]*U_ch[i,t])
+        model.addConstr(Cost_ES_ch[i,t]==stbidprice['价格-1'][i]*U_ch[i,t])
         
         
         #放电成本分段线性化
         for j in range(N_ES_segs):
             model.addConstr(P_ES_dch_segs[j,i,t]>=0)
-            model.addConstr(P_ES_dch_segs[j,i,t]<=deltaP_ES)
+            model.addConstr(P_ES_dch_segs[j,i,t]<=deltaP_ES[i])
 
         #每段功率之和等于总功率
         model.addConstr(P_ES_dch[i,t]==sum([P_ES_dch_segs[j,i,t] for j in range(N_ES_segs)])+storagebasic['最小发电功率（MW）'][i]*U_dch[i,t])
 
         #总成本
-        model.addConstr(Cost_ES_dch[i,t]==sum(a_ES[j]*P_ES_dch_segs[j,i,t] for j in range(N_ES_segs))+U_dch[i,t]*C0_ES)
+        model.addConstr(Cost_ES_dch[i,t]==sum(a_ES[i][j]*P_ES_dch_segs[j,i,t] for j in range(N_ES_segs))+U_dch[i,t]*C0_ES[i])
 
 #系统约束
 for t in range(T):
@@ -368,7 +382,7 @@ model.setObjective(copt.quicksum(Cost_unit_start)+copt.quicksum(Cost_unit_opr)+c
 
 #---------------------------------Solve---------------------------------#
 model.setParam("Logging", 1)
-model.setParam("RelGap", 5e-4)
+model.setParam("RelGap", 3e-4)
 model.solve()
 if model.status == copt.COPT.INFEASIBLE:
   # Compute IIS
@@ -397,7 +411,7 @@ print('总成本:',model.objval)
 print('---------------------------------')
 
 #通过成本函数计算成本
-Cost_ES_ch_val,Cost_ES_dch_val,Cost_unit_start_val,Cost_unit_opr_val=calculateCosts(P_ES_ch_val[0],P_ES_dch_val[0],U_ch_val[0],U_dch_val[0],P_unit_val,U_unit_val)
+Cost_ES_ch_val,Cost_ES_dch_val,Cost_unit_start_val,Cost_unit_opr_val=calculateCosts(P_ES_ch_val,P_ES_dch_val,U_ch_val,U_dch_val,P_unit_val,U_unit_val)
 print('校验火电机组启动成本:',Cost_unit_start_val)
 print('校验火电机组运行成本:',Cost_unit_opr_val)
 print('校验储能机组充电成本:',Cost_ES_ch_val)

@@ -6,13 +6,20 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 from openpyxl.formatting.rule import ColorScaleRule
 
-def read_txt(file_path):
+def read_txt(file_path,is_storage_price=False):
 
     with open(file_path, 'r', encoding='ANSI') as file:
         lines = file.readlines()
 
     #去掉开头的"//"和空格的影响
     lines = [line.strip().lstrip('//') for line in lines]
+    
+    #修复储能报价和容量的表头格式问题
+    if is_storage_price and ('机组 报价段'in lines[0]) or ('机组\t报价段'in lines[0]):
+        lines[0] = lines[0].replace('机组 报价段', '机组\t报价段-1\t报价段0\t报价段1\t报价段2\t报价段3\t报价段4')
+
+    elif is_storage_price and '价格'in lines[0]:
+        lines[0] ='机组序号\t价格-1\t价格0\t价格1\t价格2\t价格3\t价格4\t价格5'
 
     #修复unitdata.txt文件中的表头格式问题
     if 'unitdata.txt' in file_path:
@@ -99,7 +106,6 @@ def getSegmentedPoints(num_seg,deltaP,P_min):
         Pmins.append(P_min+i*deltaP)
         Pmaxs.append(P_min+(i+1)*deltaP)
 
-
     return Pmins,Pmaxs
 
 
@@ -125,39 +131,46 @@ def readSols(filePath):
             unit_power_lines.append(line)
             
     #读取储能的信息
-    P_ES_ch=np.zeros(24)
-    P_ES_dch=np.zeros(24)
-    U_ES=np.zeros(24)
-    U_ch=np.zeros(24)
-    U_dch=np.zeros(24)
+    N_ESs=int(len(storage_status_lines)/24)
+    P_ES_ch=np.zeros((N_ESs,24))
+    P_ES_dch=np.zeros((N_ESs,24))
+    U_ES=np.zeros((N_ESs,24))
+    U_ch=np.zeros((N_ESs,24))
+    U_dch=np.zeros((N_ESs,24))
+
     
     #储能充放电功率
     for t,line in enumerate(storage_power_lines):
         line=line.split()
+        P_ES=float(line[1])
         if float(line[1])<=0:
-            P_ES_ch[t]=-float(line[1])
-            P_ES_dch[t]=0
+            P_ES_ch[t//24,t%24]=-P_ES
+            P_ES_dch[t//24,t%24]=0
         else:
-            P_ES_ch[t]=0
-            P_ES_dch[t]=float(line[1])
+            P_ES_ch[t//24,t%24]=0
+            P_ES_dch[t//24,t%24]=P_ES
             
     #储能状态
     for t,line in enumerate(storage_status_lines):
         line=line.split()
+
         if line[1]=='-1': #充电状态
-            U_ES[t]=0
-            U_ch[t]=1
-            U_dch[t]=0
+            U_ES[t//24,t%24]=0
+            U_ch[t//24,t%24]=1
+            U_dch[t//24,t%24]=0
             
         elif line[1]=='1': #放电状态
-            U_ES[t]=0
-            U_ch[t]=0
-            U_dch[t]=1
+            U_ES[t//24,t%24]=0
+            U_ch[t//24,t%24]=0
+            U_dch[t//24,t%24]=1
         
         elif line[1]=='0': #停机状态
-            U_ES[t]=1
-            U_ch[t]=0
-            U_dch[t]=0
+            U_ES[t//24,t%24]=1
+            U_ch[t//24,t%24]=0
+            U_dch[t//24,t%24]=0
+        
+        else:
+            raise ValueError("Invalid storage status")
             
     #读取机组的信息
     N_unit=int(len(unit_power_lines)/24)
@@ -166,7 +179,6 @@ def readSols(filePath):
     
     #机组发电功率
     for t,line in enumerate(unit_power_lines):
-        #t/24取余数为机组编号
         line=line.split()
         P_unit[t//24,t%24]=float(line[1])
         
@@ -177,6 +189,8 @@ def readSols(filePath):
             U_unit[t//24,t%24]=1
         elif line[1]=='0':
             U_unit[t//24,t%24]=0
+        else:
+            raise ValueError("Invalid unit status")
         
     Vars={"P_ES_ch":P_ES_ch,
               "P_ES_dch":P_ES_dch,
@@ -205,7 +219,7 @@ def addColors(filePath,bin_table_name=['机组状态','机组启动状态','机�
         ws = wb[sheet_name]
 
         # 更改单元格底色
-        for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=2, max_col=ws.max_column):
             for cell in row:
                 if cell.value == 1:
                     cell.fill = fill_1
@@ -230,6 +244,9 @@ def addColors(filePath,bin_table_name=['机组状态','机组启动状态','机�
     
 def Sols2Excel(U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num,is_opt):
     
+    N_ESs=U_ch.shape[0]
+    N_units=U_unit.shape[0]
+
     U_unit=pd.DataFrame(U_unit)
     U_unit['机组编号']=U_unit.index+1
     cols = list(U_unit)
@@ -242,12 +259,33 @@ def Sols2Excel(U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num,is_op
     cols.insert(0, cols.pop(cols.index('机组编号')))
     P_unit = P_unit.loc[:, cols]
 
-    ES_status = pd.DataFrame()
-    ES_status['充电状态'] = U_ch
-    ES_status['放电状态'] = U_dch
-    ES_status['停机状态'] = U_ES
-    ES_status['充电功率'] = P_ES_ch
-    ES_status['放电功率'] = P_ES_dch
+    storage_status=5*np.ones((N_ESs,24))
+    storage_power=5*np.ones((N_ESs,24))
+    for i in range(N_ESs):
+        for t in range(24):
+            if U_ch[i,t]==1:
+                storage_status[i,t]=-1
+                storage_power[i,t]=-P_ES_ch[i,t]
+            elif U_dch[i,t]==1:
+                storage_status[i,t]=1
+                storage_power[i,t]=P_ES_dch[i,t]
+            elif U_ES[i,t]==1:
+                storage_status[i,t]=0
+                storage_power[i,t]=0
+            else:
+                raise ValueError("Invalid storage status")
+    
+    ES_status = pd.DataFrame(storage_status)
+    ES_status['储能编号'] = ES_status.index+1
+    cols = list(ES_status)
+    cols.insert(0, cols.pop(cols.index('储能编号')))
+    ES_status = ES_status.loc[:, cols]
+
+    ES_power = pd.DataFrame(storage_power)
+    ES_power['储能编号'] = ES_power.index+1
+    cols = list(ES_power)
+    cols.insert(0, cols.pop(cols.index('储能编号')))
+    ES_power = ES_power.loc[:, cols]
     
     if is_opt:
         filepath=f'results/{instance_num}/optimal_result.xlsx'
@@ -258,8 +296,9 @@ def Sols2Excel(U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num,is_op
         U_unit.to_excel(writer, sheet_name='机组状态', index=False)
         P_unit.to_excel(writer, sheet_name='机组发电功率', index=False)
         ES_status.to_excel(writer, sheet_name='储能状态', index=False)
+        ES_power.to_excel(writer, sheet_name='储能充放电功率', index=False)
     
-    addColors(filepath,bin_table_name=['机组状态','储能状态'],continuous_table_name=['机组发电功率'])
+    addColors(filepath,bin_table_name=['机组状态','储能状态'],continuous_table_name=['机组发电功率','储能充放电功率'])
 
 
 def writeSols(model,U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num):
@@ -296,5 +335,4 @@ def writeSols(model,U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num)
                     f.write(f"unit{i+1}_p_{t} 0\n")
                     
     print(f"Results have been written to results/{instance_num}/solution.sol")
-                    
                     
