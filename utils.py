@@ -109,6 +109,105 @@ def getSegmentedPoints(num_seg,deltaP,P_min):
     return Pmins,Pmaxs
 
 
+def addColors(filePath,bin_table_name=['机组状态','机组启动状态','机组停机状态','储能状态'],continuous_table_name=['机组功率']):
+    
+    
+    # 加载工作簿
+    wb = load_workbook(filePath)
+
+    # 定义填充样式
+    fill_1 = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")  # 黄色
+    fill_0 = PatternFill(start_color="00FF00", end_color="00FF00", fill_type="solid")  # 绿色
+
+
+    for sheet_name in bin_table_name:
+
+        ws = wb[sheet_name]
+
+        # 更改单元格底色
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=2, max_col=ws.max_column):
+            for cell in row:
+                if cell.value == 1:
+                    cell.fill = fill_1
+                elif cell.value == 0:
+                    cell.fill = fill_0
+
+
+    # 为连续值的变量设置颜色渐变
+    for sheet_name in continuous_table_name:
+
+        ws = wb[sheet_name]
+
+        color_scale_rule = ColorScaleRule(start_type='min', start_color='FFFFFF',
+                                        mid_type='percentile', mid_value=50, mid_color='FFFF00',
+                                        end_type='max', end_color='FF0000')
+        ws.conditional_formatting.add(f'B2:Z{ws.max_row}', color_scale_rule)
+
+
+    # 保存工作簿
+    wb.save(filePath)
+    
+    
+def Sols2Excel(U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num,is_opt):
+    
+    eps=1e-2
+    
+    N_ESs=U_ch.shape[0]
+    N_units=U_unit.shape[0]
+
+    U_unit=pd.DataFrame(U_unit)
+    U_unit['机组编号']=U_unit.index+1
+    cols = list(U_unit)
+    cols.insert(0, cols.pop(cols.index('机组编号')))
+    U_unit = U_unit.loc[:, cols]
+
+    P_unit=pd.DataFrame(P_unit)
+    P_unit['机组编号']=P_unit.index+1
+    cols = list(P_unit)
+    cols.insert(0, cols.pop(cols.index('机组编号')))
+    P_unit = P_unit.loc[:, cols]
+
+    storage_status=5*np.ones((N_ESs,24))
+    storage_power=5*np.ones((N_ESs,24))
+    for i in range(N_ESs):
+        for t in range(24):
+            if abs(U_ch[i,t])-1<eps:
+                storage_status[i,t]=-1
+                storage_power[i,t]=-P_ES_ch[i,t]
+            elif abs(U_ch[i,t])-1<eps:
+                storage_status[i,t]=1
+                storage_power[i,t]=P_ES_dch[i,t]
+            elif abs(U_ES[i,t]-1)<eps:
+                storage_status[i,t]=0
+                storage_power[i,t]=0
+            else:
+                raise ValueError("Invalid storage status")
+    
+    ES_status = pd.DataFrame(storage_status)
+    ES_status['储能编号'] = ES_status.index+1
+    cols = list(ES_status)
+    cols.insert(0, cols.pop(cols.index('储能编号')))
+    ES_status = ES_status.loc[:, cols]
+
+    ES_power = pd.DataFrame(storage_power)
+    ES_power['储能编号'] = ES_power.index+1
+    cols = list(ES_power)
+    cols.insert(0, cols.pop(cols.index('储能编号')))
+    ES_power = ES_power.loc[:, cols]
+    
+    if is_opt:
+        filepath=f'results/{instance_num}/optimal_result.xlsx'
+    else:
+        filepath=f'results/{instance_num}/result.xlsx'
+
+    with pd.ExcelWriter(filepath) as writer:
+        U_unit.to_excel(writer, sheet_name='机组状态', index=False)
+        P_unit.to_excel(writer, sheet_name='机组发电功率', index=False)
+        ES_status.to_excel(writer, sheet_name='储能状态', index=False)
+        ES_power.to_excel(writer, sheet_name='储能充放电功率', index=False)
+    
+    addColors(filepath,bin_table_name=['机组状态','储能状态'],continuous_table_name=['机组发电功率','储能充放电功率'])
+
 def readSols(filePath):
 
     with open(filePath, 'r') as f:
@@ -203,136 +302,61 @@ def readSols(filePath):
     return Vars
 
 
-def addColors(filePath,bin_table_name=['机组状态','机组启动状态','机组停机状态','储能状态'],continuous_table_name=['机组功率']):
-    
-    
-    # 加载工作簿
-    wb = load_workbook(filePath)
-
-    # 定义填充样式
-    fill_1 = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")  # 黄色
-    fill_0 = PatternFill(start_color="00FF00", end_color="00FF00", fill_type="solid")  # 绿色
-
-
-    for sheet_name in bin_table_name:
-
-        ws = wb[sheet_name]
-
-        # 更改单元格底色
-        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=2, max_col=ws.max_column):
-            for cell in row:
-                if cell.value == 1:
-                    cell.fill = fill_1
-                elif cell.value == 0:
-                    cell.fill = fill_0
-
-
-    # 为连续值的变量设置颜色渐变
-    for sheet_name in continuous_table_name:
-
-        ws = wb[sheet_name]
-
-        color_scale_rule = ColorScaleRule(start_type='min', start_color='FFFFFF',
-                                        mid_type='percentile', mid_value=50, mid_color='FFFF00',
-                                        end_type='max', end_color='FF0000')
-        ws.conditional_formatting.add(f'B2:Z{ws.max_row}', color_scale_rule)
-
-
-    # 保存工作簿
-    wb.save(filePath)
-    
-    
-def Sols2Excel(U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num,is_opt):
-    
-    N_ESs=U_ch.shape[0]
-    N_units=U_unit.shape[0]
-
-    U_unit=pd.DataFrame(U_unit)
-    U_unit['机组编号']=U_unit.index+1
-    cols = list(U_unit)
-    cols.insert(0, cols.pop(cols.index('机组编号')))
-    U_unit = U_unit.loc[:, cols]
-
-    P_unit=pd.DataFrame(P_unit)
-    P_unit['机组编号']=P_unit.index+1
-    cols = list(P_unit)
-    cols.insert(0, cols.pop(cols.index('机组编号')))
-    P_unit = P_unit.loc[:, cols]
-
-    storage_status=5*np.ones((N_ESs,24))
-    storage_power=5*np.ones((N_ESs,24))
-    for i in range(N_ESs):
-        for t in range(24):
-            if U_ch[i,t]==1:
-                storage_status[i,t]=-1
-                storage_power[i,t]=-P_ES_ch[i,t]
-            elif U_dch[i,t]==1:
-                storage_status[i,t]=1
-                storage_power[i,t]=P_ES_dch[i,t]
-            elif U_ES[i,t]==1:
-                storage_status[i,t]=0
-                storage_power[i,t]=0
-            else:
-                raise ValueError("Invalid storage status")
-    
-    ES_status = pd.DataFrame(storage_status)
-    ES_status['储能编号'] = ES_status.index+1
-    cols = list(ES_status)
-    cols.insert(0, cols.pop(cols.index('储能编号')))
-    ES_status = ES_status.loc[:, cols]
-
-    ES_power = pd.DataFrame(storage_power)
-    ES_power['储能编号'] = ES_power.index+1
-    cols = list(ES_power)
-    cols.insert(0, cols.pop(cols.index('储能编号')))
-    ES_power = ES_power.loc[:, cols]
-    
-    if is_opt:
-        filepath=f'results/{instance_num}/optimal_result.xlsx'
-    else:
-        filepath=f'results/{instance_num}/result.xlsx'
-
-    with pd.ExcelWriter(filepath) as writer:
-        U_unit.to_excel(writer, sheet_name='机组状态', index=False)
-        P_unit.to_excel(writer, sheet_name='机组发电功率', index=False)
-        ES_status.to_excel(writer, sheet_name='储能状态', index=False)
-        ES_power.to_excel(writer, sheet_name='储能充放电功率', index=False)
-    
-    addColors(filepath,bin_table_name=['机组状态','储能状态'],continuous_table_name=['机组发电功率','储能充放电功率'])
-
-
 def writeSols(model,U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num):
     
     N_ESs=U_ch.shape[0]
     N_units=U_unit.shape[0]
-    
+    eps=1e-2
     
     # 保存结果
     with open(f'results/{instance_num}/solution.sol', 'w') as f:
-        f.write(f"# Objective Value: {model.objval}\n")
+        f.write(f"# Objective value = {model.objval}\n")
         
         #写入储能的结果
         for i in range(N_ESs):
             for t in range(24):
-                if U_ch[i,t]==1:
+                if abs(U_ch[i,t]-1)<eps:
                     f.write(f"storage{i+1}_s_{t} -1\n")
                     f.write(f"storage{i+1}_p_{t} {-P_ES_ch[i,t]}\n")
-                elif U_dch[i,t]==1:
+                elif abs(U_dch[i,t]-1)<eps:
                     f.write(f"storage{i+1}_s_{t} 1\n")
                     f.write(f"storage{i+1}_p_{t} {P_ES_dch[i,t]}\n")
-                elif U_ES[i,t]==1:
+                elif abs(U_ES[i,t]-1)<eps:
                     f.write(f"storage{i+1}_s_{t} 0\n")
                     f.write(f"storage{i+1}_p_{t} 0\n")
+                else:
+                    raise ValueError("Invalid storage status") #确保每个决策变量都write进去了
                     
         #写入机组的结果
         for i in range(N_units):
             for t in range(24):
-                if U_unit[i,t]==1:
+                if abs(U_unit[i,t]-1)<eps:
                     f.write(f"unit{i+1}_s_{t} 1\n")
                     f.write(f"unit{i+1}_p_{t} {P_unit[i,t]}\n")
-                else:
+                elif abs(U_unit[i,t]-0)<eps:
                     f.write(f"unit{i+1}_s_{t} 0\n")
                     f.write(f"unit{i+1}_p_{t} 0\n")
+
+                else:
+                    raise ValueError("Invalid unit status")
                     
     print(f"Results have been written to results/{instance_num}/solution.sol")
-                    
+
+def checkConstraints(model):
+    pass
+
+def selfCheckLoadBalance(instance_num):
+    eps=1e-3
+    filepath=f"results/{instance_num}/solution.sol"
+    Vars=readSols(filepath)
+    load=txt_to_dataframe(read_txt(f'data/instances/{instance_num}/slf.txt'))
+    for t in range(24):
+        P_load=np.sum(Vars["P_unit"][:,t])+np.sum(Vars["P_ES_dch"][:,t])-np.sum(Vars["P_ES_ch"][:,t])
+        if abs(P_load-load['系统负荷大小（MW）'][t])<eps:
+            print (f"负荷平衡约束在时刻{t}满足")
+
+        else:
+            print (f"负荷平衡约束在时刻{t}不满足, 当前负荷为{P_load}, 系统负荷为{load['系统负荷大小（MW）'][t]}")
+        
+selfCheckLoadBalance(60)
+selfCheckLoadBalance(200)
