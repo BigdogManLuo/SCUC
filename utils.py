@@ -1,5 +1,6 @@
 import numpy as np
 from io import StringIO
+import os
 import re
 import pandas as pd
 from openpyxl import load_workbook
@@ -150,6 +151,10 @@ def addColors(filePath,bin_table_name=['机组状态','机组启动状态','机�
     
 def Sols2Excel(U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num,is_opt):
     
+    #检测路径，如果不存在则创建
+    if not os.path.exists(f'results/{instance_num}'):
+        os.makedirs(f'results/{instance_num}')
+
     eps=1e-2
     
     N_ESs=U_ch.shape[0]
@@ -209,6 +214,9 @@ def Sols2Excel(U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num,is_op
     addColors(filepath,bin_table_name=['机组状态','储能状态'],continuous_table_name=['机组发电功率','储能充放电功率'])
 
 def readSols(filePath):
+    '''
+    读取solution.sol文件，返回决策变量的值
+    '''
 
     with open(filePath, 'r') as f:
         lines = f.readlines()
@@ -303,7 +311,24 @@ def readSols(filePath):
 
 
 def writeSols(model,U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num):
+    '''
+    将求解结果写入solution.sol文件
+    输入：
+    model: 求解模型
+    U_unit: 机组状态
+    P_unit: 机组发电功率
+    U_ch: 储能充电状态
+    U_dch: 储能放电状态
+    U_ES: 储能状态
+    P_ES_ch: 储能充电功率
+    P_ES_dch: 储能放电功率
+    instance_num: 实例编号
+    '''
     
+    #检测路径，如果不存在则创建
+    if not os.path.exists(f'results/{instance_num}'):
+        os.makedirs(f'results/{instance_num}')
+        
     N_ESs=U_ch.shape[0]
     N_units=U_unit.shape[0]
     eps=1e-2
@@ -343,10 +368,14 @@ def writeSols(model,U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num)
     print(f"Results have been written to results/{instance_num}/solution.sol")
 
 def checkConstraints(model):
+    
+    constraints = model.getConstrs()
     pass
 
-def selfCheckLoadBalance(instance_num):
-    eps=1e-3
+
+
+def selfCheckLoadBalance(instance_num,eps=1e-4):
+
     filepath=f"results/{instance_num}/solution.sol"
     Vars=readSols(filepath)
     load=txt_to_dataframe(read_txt(f'data/instances/{instance_num}/slf.txt'))
@@ -358,5 +387,5 @@ def selfCheckLoadBalance(instance_num):
         else:
             print (f"负荷平衡约束在时刻{t}不满足, 当前负荷为{P_load}, 系统负荷为{load['系统负荷大小（MW）'][t]}")
         
-selfCheckLoadBalance(60)
-selfCheckLoadBalance(200)
+#selfCheckLoadBalance(60)
+#selfCheckLoadBalance(200)

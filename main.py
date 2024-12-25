@@ -1,9 +1,7 @@
-import pandas as pd
-import cvxpy as cp
 import numpy as np
 import utils
 import coptpy as copt
-
+import os
 
 def calculateCosts(P_ES_ch,P_ES_dch,U_ch,U_dch,P_unit,U_unit,):
 
@@ -92,7 +90,8 @@ def calculateCosts(P_ES_ch,P_ES_dch,U_ch,U_dch,P_unit,U_unit,):
 
 
 #%%  
-instance_num=100
+#输入求解的样例编号
+instance_num=200 
 
 #---------------------------Parameters-----------------------------------------#
 bid_capacity = utils.txt_to_dataframe(utils.read_txt(f'data/instances/{instance_num}/bidcapacity.txt'))
@@ -199,9 +198,9 @@ for i in range(N_units):
                 model.addConstr(U_unit[i,t]==1, name=f'V_unit_{i}_{t}_init')
         
         if t+unitdata['最小开机时间(h)'][i]<=T:
-            model.addConstr(sum([U_unit[i,k] for k in range(t,t+unitdata['最小开机时间(h)'][i])])>=unitdata['最小开机时间(h)'][i]*V_unit[i,t],name=f'V_unit_{i}_{t}_min_time')
+            model.addConstr(copt.quicksum([U_unit[i,k] for k in range(t,t+unitdata['最小开机时间(h)'][i])])>=unitdata['最小开机时间(h)'][i]*V_unit[i,t],name=f'V_unit_{i}_{t}_min_time')
         else:
-            model.addConstr(sum([U_unit[i,k] for k in range(t,T)])>=V_unit[i,t]*(T-t),name=f'V_unit_{i}_{t}_min_time')
+            model.addConstr(copt.quicksum([U_unit[i,k] for k in range(t,T)])>=V_unit[i,t]*(T-t),name=f'V_unit_{i}_{t}_min_time')
 
         
         #最小停机时间约束
@@ -210,9 +209,9 @@ for i in range(N_units):
                 model.addConstr(U_unit[i,t]==0, name=f'W_unit_{i}_{t}_init')
         
         if t+unitdata['最小停机时间(h)'][i]<=T:
-            model.addConstr(sum([1-U_unit[i,k] for k in range(t,t+unitdata['最小停机时间(h)'][i])])>=unitdata['最小停机时间(h)'][i]*W_unit[i,t],name=f'W_unit_{i}_{t}_min_time')
+            model.addConstr(copt.quicksum([1-U_unit[i,k] for k in range(t,t+unitdata['最小停机时间(h)'][i])])>=unitdata['最小停机时间(h)'][i]*W_unit[i,t],name=f'W_unit_{i}_{t}_min_time')
         else:
-            model.addConstr(sum([1-U_unit[i,k] for k in range(t,T)])>=W_unit[i,t]*(T-t),name=f'W_unit_{i}_{t}_min_time')
+            model.addConstr(copt.quicksum([1-U_unit[i,k] for k in range(t,T)])>=W_unit[i,t]*(T-t),name=f'W_unit_{i}_{t}_min_time')
         
         #启停机状态转换
         if t==0: #初始时刻的启停机状态
@@ -291,21 +290,21 @@ for i in range(N_ESs):
 
         #最小抽水时间约束
         if t+storagebasic['最小抽水时段'][i]<=T:
-            model.addConstr(sum([U_ch[i, k] for k in range(t, t + storagebasic['最小抽水时段'][i])]) >= storagebasic['最小抽水时段'][i] * Z_ch[i, t],name=f'Z_ch_{i}_{t}_min_time')
+            model.addConstr(copt.quicksum([U_ch[i, k] for k in range(t, t + storagebasic['最小抽水时段'][i])]) >= storagebasic['最小抽水时段'][i] * Z_ch[i, t],name=f'Z_ch_{i}_{t}_min_time')
         else:
-            model.addConstr(sum([U_ch[i, k] for k in range(t, T)]) >= Z_ch[i, t] * (T - t),name=f'Z_ch_{i}_{t}_min_time')
+            model.addConstr(copt.quicksum([U_ch[i, k] for k in range(t, T)]) >= Z_ch[i, t] * (T - t),name=f'Z_ch_{i}_{t}_min_time')
 
         #最小放电时间约束
         if t+storagebasic['最小发电时段'][i]<=T:
-            model.addConstr(sum([U_dch[i, k] for k in range(t, t + storagebasic['最小发电时段'][i])]) >= storagebasic['最小发电时段'][i] * Z_dch[i, t],name=f'Z_dch_{i}_{t}_min_time')
+            model.addConstr(copt.quicksum([U_dch[i, k] for k in range(t, t + storagebasic['最小发电时段'][i])]) >= storagebasic['最小发电时段'][i] * Z_dch[i, t],name=f'Z_dch_{i}_{t}_min_time')
         else:
-            model.addConstr(sum([U_dch[i, k] for k in range(t, T)]) >= Z_dch[i, t] * (T - t),name=f'Z_dch_{i}_{t}_min_time')
+            model.addConstr(copt.quicksum([U_dch[i, k] for k in range(t, T)]) >= Z_dch[i, t] * (T - t),name=f'Z_dch_{i}_{t}_min_time')
 
         #最小停机时间约束
         if t+storagebasic['最小停机时段'][i]<=T:
-            model.addConstr(sum([U_ES[i, k] for k in range(t, t + storagebasic['最小停机时段'][i])]) >= storagebasic['最小停机时段'][i] * Z_ES[i, t],name=f'Z_ES_{i}_{t}_min_time')
+            model.addConstr(copt.quicksum([U_ES[i, k] for k in range(t, t + storagebasic['最小停机时段'][i])]) >= storagebasic['最小停机时段'][i] * Z_ES[i, t],name=f'Z_ES_{i}_{t}_min_time')
         else:
-            model.addConstr(sum([U_ES[i, k] for k in range(t, T)]) >= Z_ES[i, t] * (T - t),name=f'Z_ES_{i}_{t}_min_time')
+            model.addConstr(copt.quicksum([U_ES[i, k] for k in range(t, T)]) >= Z_ES[i, t] * (T - t),name=f'Z_ES_{i}_{t}_min_time')
 
         #状态互斥约束
         model.addConstr(U_ch[i, t] + U_dch[i, t] + U_ES[i, t] == 1,name=f'U_{i}_{t}_mutual')
@@ -343,10 +342,10 @@ for i in range(N_ESs):
             model.addConstr(P_ES_dch_segs[j,i,t]<=deltaP_ES[i],name=f'P_ES_dch_segs_{j}_{i}_{t}_max')
 
         #每段功率之和等于总功率
-        model.addConstr(P_ES_dch[i,t]==sum([P_ES_dch_segs[j,i,t] for j in range(N_ES_segs)])+storagebasic['最小发电功率（MW）'][i]*U_dch[i,t],name=f'P_ES_dch_{i}_{t}_sum')
+        model.addConstr(P_ES_dch[i,t]==copt.quicksum([P_ES_dch_segs[j,i,t] for j in range(N_ES_segs)])+storagebasic['最小发电功率（MW）'][i]*U_dch[i,t],name=f'P_ES_dch_{i}_{t}_sum')
 
         #总成本
-        model.addConstr(Cost_ES_dch[i,t]==sum(a_ES[i][j]*P_ES_dch_segs[j,i,t] for j in range(N_ES_segs))+U_dch[i,t]*C0_ES[i],name=f'Cost_ES_dch_{i}_{t}')
+        model.addConstr(Cost_ES_dch[i,t]==copt.quicksum(a_ES[i][j]*P_ES_dch_segs[j,i,t] for j in range(N_ES_segs))+U_dch[i,t]*C0_ES[i],name=f'Cost_ES_dch_{i}_{t}')
 
 #系统约束
 for t in range(T):
@@ -383,10 +382,12 @@ model.setObjective(copt.quicksum(Cost_unit_start)+copt.quicksum(Cost_unit_opr)+c
 
 #---------------------------------Solve---------------------------------#
 model.setParam("Logging", 1)
-model.setParam("RelGap", 3e-4)
+model.setParam("RelGap", 0.0003)
+#model.setParam("GPUMode",1)
 model.setParam("DivingHeurLevel",2)
-model.setParam("StrongBranching",2)
-model.setParam("MipStartMode",2)
+#model.setParam("StrongBranching",2)
+#model.setParam("MipStartMode",2)
+model.setParam("TimeLimit",3600)
 
 model.solve()
 if model.status == copt.COPT.INFEASIBLE:
@@ -397,13 +398,12 @@ if model.status == copt.COPT.INFEASIBLE:
 
 #整理变量
 P_unit_val=np.array([[P_unit[i,t].value for t in range(T)] for i in range(N_units)])
-U_unit_val=np.array([[U_unit[i,t].value for t in range(T)] for i in range(N_units)])
-U_ch_val=np.array([[U_ch[i,t].value for t in range(T)] for i in range(N_ESs)])
-U_dch_val=np.array([[U_dch[i,t].value for t in range(T)] for i in range(N_ESs)])
-U_ES_val=np.array([[U_ES[i,t].value for t in range(T)] for i in range(N_ESs)])
+U_unit_val=np.array([[int(np.round(U_unit[i,t].value)) for t in range(T)] for i in range(N_units)])
+U_ch_val=np.array([[int(np.round(U_ch[i,t].value)) for t in range(T)] for i in range(N_ESs)])
+U_dch_val=np.array([[int(np.round(U_dch[i,t].value)) for t in range(T)] for i in range(N_ESs)])
+U_ES_val=np.array([[int(np.round(U_ES[i,t].value)) for t in range(T)] for i in range(N_ESs)])
 P_ES_ch_val=np.array([[P_ES_ch[i,t].value for t in range(T)] for i in range(N_ESs)])
 P_ES_dch_val=np.array([[P_ES_dch[i,t].value for t in range(T)] for i in range(N_ESs)])
-
 
 #---------------------------------Output---------------------------------#
 
@@ -426,16 +426,21 @@ print('---------------------------------')
 
 
 #校验外部最优解对应的成本
-Vars=utils.readSols(f'data/instances/{instance_num}/solution.sol')
-utils.Sols2Excel(**Vars,instance_num=instance_num,is_opt=True)
-Vars.pop('U_ES')
-Cost_ES_ch_val,Cost_ES_dch_val,Cost_unit_start_val,Cost_unit_opr_val=calculateCosts(**Vars)
-print('外部最优解校验火电机组启动成本:',Cost_unit_start_val)
-print('外部最优解校验火电机组运行成本:',Cost_unit_opr_val)
-print('外部最优解校验储能机组充电成本:',Cost_ES_ch_val)
-print('外部最优解校验储能机组放电成本:',Cost_ES_dch_val)
-print('外部最优解校验总成本:',Cost_unit_start_val+Cost_unit_opr_val+Cost_ES_ch_val+Cost_ES_dch_val)
 
+#如果路径存在：
+if os.path.exists(f'data/instances/{instance_num}/solution.sol'):
+
+    Vars=utils.readSols(f'data/instances/{instance_num}/solution.sol')
+    utils.Sols2Excel(**Vars,instance_num=instance_num,is_opt=True)
+    Vars.pop('U_ES')
+    Cost_ES_ch_val,Cost_ES_dch_val,Cost_unit_start_val,Cost_unit_opr_val=calculateCosts(**Vars)
+    print('外部最优解校验火电机组启动成本:',Cost_unit_start_val)
+    print('外部最优解校验火电机组运行成本:',Cost_unit_opr_val)
+    print('外部最优解校验储能机组充电成本:',Cost_ES_ch_val)
+    print('外部最优解校验储能机组放电成本:',Cost_ES_dch_val)
+    print('外部最优解校验总成本:',Cost_unit_start_val+Cost_unit_opr_val+Cost_ES_ch_val+Cost_ES_dch_val)
+
+#写入excel
 utils.Sols2Excel(U_unit_val,P_unit_val,U_ch_val,U_dch_val,U_ES_val,P_ES_ch_val,P_ES_dch_val,instance_num=instance_num,is_opt=False)
 
 #写入solution.sol
