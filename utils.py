@@ -310,29 +310,34 @@ def readSols(filePath):
     return Vars
 
 
-def writeSols(model,U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num):
-    '''
-    将求解结果写入solution.sol文件
-    输入：
-    model: 求解模型
-    U_unit: 机组状态
-    P_unit: 机组发电功率
-    U_ch: 储能充电状态
-    U_dch: 储能放电状态
-    U_ES: 储能状态
-    P_ES_ch: 储能充电功率
-    P_ES_dch: 储能放电功率
-    instance_num: 实例编号
-    '''
-    
-    #检测路径，如果不存在则创建
+def writeSols(model,instance_num):
+
+    global N_units,N_ESs
+
     if not os.path.exists(f'results/{instance_num}'):
         os.makedirs(f'results/{instance_num}')
-        
-    N_ESs=U_ch.shape[0]
-    N_units=U_unit.shape[0]
+
+    U_ch=np.zeros((N_ESs,24))
+    U_dch=np.zeros((N_ESs,24))
+    U_ES=np.zeros((N_ESs,24))
+    P_ES_ch=np.zeros((N_ESs,24))
+    P_ES_dch=np.zeros((N_ESs,24))
+    U_unit=np.zeros((N_units,24))
+    P_unit=np.zeros((N_units,24))
+
+    for t in range(24):
+        for i in range(N_ESs):
+            U_ch[i,t]=model.getVarByName(f"U_ch({i},{t})").value
+            U_dch[i,t]=model.getVarByName(f"U_dch({i},{t})").value
+            U_ES[i,t]=model.getVarByName(f"U_ES({i},{t})").value
+            P_ES_ch[i,t]=model.getVarByName(f"P_ES_ch({i},{t})").value
+            P_ES_dch[i,t]=model.getVarByName(f"P_ES_dch({i},{t})").value
+
+        for i in range(N_units):
+            U_unit[i,t]=model.getVarByName(f"U_unit({i},{t})").value
+            P_unit[i,t]=model.getVarByName(f"P_unit({i},{t})").value
+
     eps=1e-2
-    
     # 保存结果
     with open(f'results/{instance_num}/solution.sol', 'w') as f:
         f.write(f"# Objective value = {model.objval}\n")
@@ -367,25 +372,3 @@ def writeSols(model,U_unit,P_unit,U_ch,U_dch,U_ES,P_ES_ch,P_ES_dch,instance_num)
                     
     print(f"Results have been written to results/{instance_num}/solution.sol")
 
-def checkConstraints(model):
-    
-    constraints = model.getConstrs()
-    pass
-
-
-
-def selfCheckLoadBalance(instance_num,eps=1e-4):
-
-    filepath=f"results/{instance_num}/solution.sol"
-    Vars=readSols(filepath)
-    load=txt_to_dataframe(read_txt(f'data/instances/{instance_num}/slf.txt'))
-    for t in range(24):
-        P_load=np.sum(Vars["P_unit"][:,t])+np.sum(Vars["P_ES_dch"][:,t])-np.sum(Vars["P_ES_ch"][:,t])
-        if abs(P_load-load['系统负荷大小（MW）'][t])<eps:
-            print (f"负荷平衡约束在时刻{t}满足")
-
-        else:
-            print (f"负荷平衡约束在时刻{t}不满足, 当前负荷为{P_load}, 系统负荷为{load['系统负荷大小（MW）'][t]}")
-        
-#selfCheckLoadBalance(60)
-#selfCheckLoadBalance(200)

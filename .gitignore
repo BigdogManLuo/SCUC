@@ -1,0 +1,7 @@
+__pycache__
+data/instances
+data/sols
+data/results
+!data/instances/.gitkeep
+!data/sols/.gitkeep
+!data/results/.gitkeep
