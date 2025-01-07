@@ -10,8 +10,4 @@ This repository provides an implementation of a security-constrained unit commit
 
 ## Acknowledgement
 
-<<<<<<< HEAD
 Thanks to Yue Xiang, [Junlin Zhu](https://github.com/theresebelivet), [Ling Tan](https://github.com/GuWeiyi1), and [Yunjie Yang](https://github.com/202575) for their contributions to this project.
-=======
-Express our heartfelt thanks to Yue Xiang, [Junlin Zhu](https://github.com/theresebelivet), [Ling Tan](https://github.com/GuWeiyi1), and [Yunjie Yang](https://github.com/202575) for their contributions to this project.
->>>>>>> afacbca16a5a66cde20a04b3bdc6b09029c3af28
