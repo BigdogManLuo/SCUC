@@ -1,4 +1,5 @@
 __pycache__
-data/instances/60/*
+data/instances/*
 data/sols/*
 !data/sols/.gitkeep
+!data/instances/.gitkeep
